@@ -490,6 +490,9 @@ fn generate_alpine_overlay(root: &Path, config: &DeploymentConfig) -> Result<Pat
         // Configure IPv6
         if !ipv6_addrs.is_empty() {
             iface_content.push_str(&format!("iface {} inet6 static\n", iface.name));
+            iface_content
+                .push_str("\tpre-up echo 0 > /proc/sys/net/ipv6/conf/$IFACE/dad_transmits\n");
+            iface_content.push_str("\tpre-up echo 0 > /proc/sys/net/ipv6/conf/$IFACE/accept_ra\n");
             for addr in ipv6_addrs {
                 iface_content.push_str(&format!("\taddress {}\n", addr));
             }
