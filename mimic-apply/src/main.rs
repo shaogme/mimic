@@ -506,7 +506,16 @@ fn generate_alpine_overlay(root: &Path, config: &DeploymentConfig) -> Result<Pat
         fs::write(etc.join("resolv.conf"), resolv)?;
     }
     fs::write(etc.join("network/interfaces"), iface_content)?;
-    debug!("Network config written");
+    fs::write(etc.join("hostname"), "alpine-rescue\n")?;
+    debug!("Network config and hostname written");
+
+    // Enable networking service
+    if let Err(e) = std::os::unix::fs::symlink(
+        "/etc/init.d/networking",
+        etc.join("runlevels/default/networking"),
+    ) {
+        warn!("Failed to symlink networking service: {}", e);
+    }
 
     // 2. Auth
     if !config.auth.ssh_authorized_keys.is_empty() {
