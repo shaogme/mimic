@@ -346,14 +346,21 @@ fn patch_alpine_init(initrd_path: &Path) -> Result<()> {
             // Patch 1: Change IFS to comma to allow IPv6 addresses
             let mut patched = content_str.replace("local IFS=':'", "local IFS=','");
 
-            // Patch 2: Conditional IP assignment
-            // Use `ifconfig` for IPv4 (netmask like 255.255.x.x) and `ip addr` for IPv6 (prefix length)
-            let ip_assign_logic = "if echo \"$netmask\" | grep -q \"\\.\"; then
-                ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"
-            else
-                ip addr add \"$client_ip/$netmask\" dev \"$iface\"
-            fi";
-            
+            // Patch 2: Conditional IP assignment & Disable IPv6 Autoconf
+            // We disable RA/Autoconf on the specific interface to prevent SLAAC pollution.
+            // Then we use `ifconfig` for IPv4 and `ip addr` for IPv6.
+            let ip_assign_logic = "
+                if [ -w /proc/sys/net/ipv6/conf/\"$iface\"/accept_ra ]; then
+                    echo 0 > /proc/sys/net/ipv6/conf/\"$iface\"/accept_ra
+                    echo 0 > /proc/sys/net/ipv6/conf/\"$iface\"/autoconf
+                fi
+                
+                if echo \"$netmask\" | grep -q \"\\.\"; then
+                    ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"
+                else
+                    ip addr add \"$client_ip/$netmask\" dev \"$iface\"
+                fi";
+
             patched = patched.replace(
                 "ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"",
                 ip_assign_logic,
@@ -368,7 +375,7 @@ fn patch_alpine_init(initrd_path: &Path) -> Result<()> {
                     ip route add default via \"$gw_ip\" dev \"$iface\"
                 fi
             fi";
-            
+
             // The original script line for routing:
             // [ -z "$gw_ip" ] || ip route add 0.0.0.0/0 via "$gw_ip" dev "$iface"
             patched = patched.replace(
@@ -388,11 +395,11 @@ fn patch_alpine_init(initrd_path: &Path) -> Result<()> {
                 // Because of the 'replace' method, we can't easily detect "already patched" unless we check for the new string.
                 if patched.contains("IFS=','") && patched.contains("ip -6 route") {
                     info!("Init script appears to be already patched.");
-                     writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
+                    writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
                 } else {
                     warn!("Could not find strict match for patching 'init'. It might have changed source or be already patched in an unrecognized way.");
-                    // We write the original content if we couldn't patch strict matches, 
-                    // BUT we already performed the replacements on `patched`. 
+                    // We write the original content if we couldn't patch strict matches,
+                    // BUT we already performed the replacements on `patched`.
                     // If `replace` didn't find the string, `patched` == `content_str`.
                     writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
                 }
