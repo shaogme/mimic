@@ -13,7 +13,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-MIMIC_APPLY_URL="https://github.com/shaogme/mimic/releases/download/v0.1.0/mimic-apply"
+MIMIC_APPLY_URL="https://github.com/shaogme/mimic/releases/download/v0.1.1/mimic-apply"
 
 if [ ! -f "mimic-apply" ]; then
     echo "Downloading mimic-apply for cleanup..."
