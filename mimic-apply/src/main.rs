@@ -343,36 +343,61 @@ fn patch_alpine_init(initrd_path: &Path) -> Result<()> {
     while let Some(entry) = reader.next_entry()? {
         if entry.name == "init" {
             let content_str = std::str::from_utf8(&entry.content).unwrap_or("");
-            // Patch 1: Change IFS to comma to allow IPv6 addresses (which contain colons)
+            // Patch 1: Change IFS to comma to allow IPv6 addresses
             let mut patched = content_str.replace("local IFS=':'", "local IFS=','");
 
-            // Patch 2: Use `ip` instead of `ifconfig` for address assignment.
-            // `ifconfig` (busybox) often struggles with "IP/Prefix" or explicit netmask for IPv6.
-            // Since we pass prefix as the "netmask" field in this case, `ip addr add IP/PREFIX` is ideal.
-            patched = patched.replace(
-                "ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"",
-                "ip addr add \"$client_ip/$netmask\" dev \"$iface\"",
-            );
-
-            // Patch 3: Use IPv6-aware routing
-            // Original line: [ -z "$gw_ip" ] || ip route add 0.0.0.0/0 via "$gw_ip" dev "$iface"
-            // We replace the core route command with a block that checks for colon in gateway IP.
-            let route_logic = "if echo \"$gw_ip\" | grep -q \":\"; then
-                ip -6 route add default via \"$gw_ip\" dev \"$iface\"
+            // Patch 2: Conditional IP assignment
+            // Use `ifconfig` for IPv4 (netmask like 255.255.x.x) and `ip addr` for IPv6 (prefix length)
+            let ip_assign_logic = "if echo \"$netmask\" | grep -q \"\\.\"; then
+                ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"
             else
-                ip route add default via \"$gw_ip\" dev \"$iface\"
+                ip addr add \"$client_ip/$netmask\" dev \"$iface\"
             fi";
             
             patched = patched.replace(
-                "ip route add 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
+                "ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"",
+                ip_assign_logic,
+            );
+
+            // Patch 3: IPv6-aware routing with onlink fallback
+            // We verify if gw_ip is IPv6 (contains :)
+            let route_logic = "if [ -n \"$gw_ip\" ]; then
+                if echo \"$gw_ip\" | grep -q \":\"; then
+                    ip -6 route add default via \"$gw_ip\" dev \"$iface\" || ip -6 route add default via \"$gw_ip\" dev \"$iface\" onlink
+                else
+                    ip route add default via \"$gw_ip\" dev \"$iface\"
+                fi
+            fi";
+            
+            // The original script line for routing:
+            // [ -z "$gw_ip" ] || ip route add 0.0.0.0/0 via "$gw_ip" dev "$iface"
+            patched = patched.replace(
+                "[ -z \"$gw_ip\" ] || ip route add 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
                 route_logic,
             );
 
             if content_str == patched {
-                warn!("Could not apply patches to 'init'. Content might have changed.");
-                writer.write_entry(&entry.name, &entry.content, entry.mode)?;
+                // If direct match failed, it might be due to our previous incomplete patch or whitespace.
+                // However, since we are patching the *original* downloaded file every time (if we don't cache it patched),
+                // or if we restart the process.
+                // NOTE: The previous tool execution might have left the code in a state where we are looking at the *source code* of the tool,
+                // but at runtime `install_alpine` downloads a fresh initrd if it doesn't exist.
+                // If it exists, we patch it. If it was ALREADY patched by a previous run, these replace calls might fail if they don't match.
+                // But `install_alpine` calls `patch_alpine_init` on the file.
+                // To be safe, we should warn but NOT fail if we can't patch, unless we are sure it's the raw file.
+                // Because of the 'replace' method, we can't easily detect "already patched" unless we check for the new string.
+                if patched.contains("IFS=','") && patched.contains("ip -6 route") {
+                    info!("Init script appears to be already patched.");
+                     writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
+                } else {
+                    warn!("Could not find strict match for patching 'init'. It might have changed source or be already patched in an unrecognized way.");
+                    // We write the original content if we couldn't patch strict matches, 
+                    // BUT we already performed the replacements on `patched`. 
+                    // If `replace` didn't find the string, `patched` == `content_str`.
+                    writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
+                }
             } else {
-                info!("Patched 'init' network logic successfully (IPv6 Support enabled).");
+                info!("Patched 'init' network logic successfully (v2 - IPv4/v6 Hybrid).");
                 writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
             }
         } else {
