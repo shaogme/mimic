@@ -19,14 +19,18 @@ jobs:
 
       - name: Modify scripts and README
         run: |
-          # Modify run.sh and clean.sh: Change pre-release to main in download URLs
-          sed -i 's|releases/download/pre-release|releases/download/main|g' run.sh clean.sh
+          # Read version from VERSION file
+          VERSION=$(cat VERSION | tr -d '\r\n')
+          echo "Using version: $VERSION"
+
+          # Modify run.sh and clean.sh: Change pre-release to the specific version in download URLs
+          sed -i "s|releases/download/pre-release|releases/download/$VERSION|g" run.sh clean.sh
           
           # Modify README.md: Change dev branch ref to main branch ref
           sed -i 's|refs/heads/dev|refs/heads/main|g' README.md
           
-          # Verify changes (optional, for debugging logs)
-          grep "releases/download/main" run.sh || echo "Modification failed for run.sh"
+          # Verify changes
+          grep "releases/download/$VERSION" run.sh || echo "Modification failed for run.sh"
           grep "refs/heads/main" README.md || echo "Modification failed for README.md"
 
       - name: Commit and Push to release-ready
