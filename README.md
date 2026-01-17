@@ -1,6 +1,6 @@
 # Mimic (拟态)
 
-**Mimic** 是一个智能的 Rescue System（救援系统）部署工具。它能在你的 Linux 宿主机上快速部署一个基于 Alpine Linux 的内存救援系统，并**自动“拟态”（复刻）**宿主机原本的网络配置和 SSH 访问权限。
+**Mimic** 是一个智能的 Rescue System（救援系统）部署工具。它能在你的 Linux 宿主机上快速部署一个基于 Alpine Linux 的内存救援系统，并 **自动“拟态”（复刻）** 宿主机原本的网络配置和 SSH 访问权限。
 
 当你的主系统因为内核崩溃、配置错误或文件系统损坏而无法启动时，你可以通过 Bootloader 进入 Mimic 救援系统。由于它继承了你熟悉的网络 IP 和 SSH Key，你无需连接物理控制台（VNC/IPMI），直接通过 SSH 连入即可开始修复工作。
 
@@ -19,38 +19,36 @@
 ### 前置要求
 *   Linux 操作系统 (x86_64)
 *   Root 权限
-*   Rust 工具链 (用于从源码编译)
+*   `curl` 或 `wget` (用于下载二进制文件)
 *   互联网连接 (用于下载 Alpine 镜像)
 
 ### 安装与运行
 
-1.  **克隆仓库**
-    ```bash
-    git clone https://github.com/your-repo/mimic.git
-    cd mimic
-    ```
+无需克隆仓库，直接下载脚本并运行即可：
 
-2.  **一键部署**
-    使用提供的 `run.sh` 脚本进行编译和部署：
-    ```bash
-    sudo ./run.sh
-    ```
-    
-    该脚本会依次执行：
-    1.  **Mimic-Gen**: 扫描系统并生成 `deployment.json` 配置文件。
-    2.  **Mimic-Apply**: 下载内核，生成配置 Overlay，并安装 Boot 条目。
+```bash
+curl -LO https://raw.githubusercontent.com/shaogme/mimic/refs/heads/main/run.sh
+chmod +x run.sh
+sudo ./run.sh
+```
 
-3.  **重启进入救援系统**
-    部署成功后，脚本会提示你：
-    ```bash
-    Run 'reboot' to start the Mimic Alpine Rescue System.
-    ```
-    如果是 GRUB 用户，工具会自动设置 `grub-reboot`，下一次重启将自动进入救援系统（一次性）。
+该脚本会依次执行：
+1.  **Mimic-Gen**: 扫描系统并生成 `deployment.json` 配置文件。
+2.  **Mimic-Apply**: 下载内核，生成配置 Overlay，并安装 Boot 条目。
+
+### 重启进入救援系统
+部署成功后，脚本会提示你：
+```bash
+Run 'reboot' to start the Mimic Alpine Rescue System.
+```
+如果是 GRUB 用户，工具会自动设置 `grub-reboot`，下一次重启将自动进入救援系统（一次性）。
 
 ### 卸载与清理
 
-如果你不再需要 Mimic 救援系统，可以使用 `clean.sh` 脚本进行一键清理：
+如果你不再需要 Mimic 救援系统，可以下载 `clean.sh` 脚本进行一键清理：
 ```bash
+curl -LO https://raw.githubusercontent.com/shaogme/mimic/refs/heads/main/clean.sh
+chmod +x clean.sh
 sudo ./clean.sh
 ```
 该命令会调用 `mimic-apply` 的清理功能，自动移除 Bootloader 启动项并删除相关文件。

@@ -13,22 +13,35 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+MIMIC_GEN_URL="https://github.com/shaogme/mimic/releases/download/v0.1.0/mimic-gen"
+MIMIC_APPLY_URL="https://github.com/shaogme/mimic/releases/download/v0.1.0/mimic-apply"
+
+# Helper to download if missing
+download_if_missing() {
+    local file="$1"
+    local url="$2"
+    if [ ! -f "$file" ]; then
+        echo "Downloading $file..."
+        curl -L -o "$file" "$url"
+        chmod +x "$file"
+    fi
+}
+
 # 1. Run mimic-gen (Deployment Generator)
 echo "----------------------------------------"
 echo "Running mimic-gen (Configuration)..."
 
-if [ ! -f "Cargo.lock" ]; then
-    cargo generate-lockfile
-fi
+download_if_missing "mimic-gen" "$MIMIC_GEN_URL"
 
-cargo run --bin mimic-gen -- --output deployment.json
+./mimic-gen --output deployment.json
 
 echo "----------------------------------------"
 
 if [ -f "deployment.json" ]; then
     echo "Configuration ready. Installing boot entry..."
     # 2. Run mimic-apply (Install Boot Entry)
-    cargo run --bin mimic-apply
+    download_if_missing "mimic-apply" "$MIMIC_APPLY_URL"
+    ./mimic-apply
 else
     echo "Deployment generation cancelled."
 fi
