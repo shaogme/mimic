@@ -1,0 +1,3 @@
+docker/* linguist-vendored
+init linguist-vendored
+shell.nix linguist-vendored
