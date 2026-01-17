@@ -1,0 +1,52 @@
+name: Pre-release
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pre-release:
+    name: Build and Pre-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Build binaries (Static)
+        run: |
+          cargo zigbuild --bin mimic-gen --bin mimic-apply --release --target x86_64-unknown-linux-musl
+
+      - name: Delete existing release and tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete pre-release --cleanup-tag -y || true
+
+      - name: Create GitHub Pre-release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Pre-release
+          tag_name: pre-release
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            target/x86_64-unknown-linux-musl/release/mimic-gen
+            target/x86_64-unknown-linux-musl/release/mimic-apply
