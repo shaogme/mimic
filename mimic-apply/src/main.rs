@@ -221,7 +221,7 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
             let gw_str = if gw.is_empty() {
                 None
             } else {
-                Some(format!("[{}]", gw))
+                Some(gw.to_string())
             };
 
             let device = iface.name.clone();
@@ -234,7 +234,7 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
             // To be safe and "parse" it as requested, we handle them.
             // Many init scripts accept [ip/prefix] as client_ip.
             // But let's try to keep fields clean: client_ip=[ip], netmask=prefix.
-            let client_ip = format!("[{}]", ip_part);
+            let client_ip = ip_part.to_string();
             let netmask_str = if prefix_part.is_empty() {
                 None
             } else {
@@ -343,16 +343,36 @@ fn patch_alpine_init(initrd_path: &Path) -> Result<()> {
     while let Some(entry) = reader.next_entry()? {
         if entry.name == "init" {
             let content_str = std::str::from_utf8(&entry.content).unwrap_or("");
-            let patched = content_str.replace(
+            // Patch 1: Change IFS to comma to allow IPv6 addresses (which contain colons)
+            let mut patched = content_str.replace("local IFS=':'", "local IFS=','");
+
+            // Patch 2: Use `ip` instead of `ifconfig` for address assignment.
+            // `ifconfig` (busybox) often struggles with "IP/Prefix" or explicit netmask for IPv6.
+            // Since we pass prefix as the "netmask" field in this case, `ip addr add IP/PREFIX` is ideal.
+            patched = patched.replace(
+                "ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"",
+                "ip addr add \"$client_ip/$netmask\" dev \"$iface\"",
+            );
+
+            // Patch 3: Use IPv6-aware routing
+            // Original line: [ -z "$gw_ip" ] || ip route add 0.0.0.0/0 via "$gw_ip" dev "$iface"
+            // We replace the core route command with a block that checks for colon in gateway IP.
+            let route_logic = "if echo \"$gw_ip\" | grep -q \":\"; then
+                ip -6 route add default via \"$gw_ip\" dev \"$iface\"
+            else
+                ip route add default via \"$gw_ip\" dev \"$iface\"
+            fi";
+            
+            patched = patched.replace(
                 "ip route add 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
-                "ip route replace 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
+                route_logic,
             );
 
             if content_str == patched {
-                warn!("Could not find strict match for patching 'init'.");
+                warn!("Could not apply patches to 'init'. Content might have changed.");
                 writer.write_entry(&entry.name, &entry.content, entry.mode)?;
             } else {
-                info!("Patched 'init' network logic successfully.");
+                info!("Patched 'init' network logic successfully (IPv6 Support enabled).");
                 writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
             }
         } else {
