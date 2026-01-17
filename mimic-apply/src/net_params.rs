@@ -108,7 +108,7 @@ impl fmt::Display for KernelIpConfig {
         // ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>:<dns0-ip>:<dns1-ip>:<ntp0-ip>
         write!(
             f,
-            "ip={}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            "ip={},{},{},{},{},{},{},{},{},{}",
             s(&self.client_ip),
             s(&self.server_ip),
             s(&self.gw_ip),

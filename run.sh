@@ -13,8 +13,8 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-MIMIC_GEN_URL="https://github.com/shaogme/mimic/releases/download/v0.1.1/mimic-gen"
-MIMIC_APPLY_URL="https://github.com/shaogme/mimic/releases/download/v0.1.1/mimic-apply"
+MIMIC_GEN_URL="https://github.com/shaogme/mimic/releases/download/v0.1.2/mimic-gen"
+MIMIC_APPLY_URL="https://github.com/shaogme/mimic/releases/download/v0.1.2/mimic-apply"
 
 # Helper to download if missing
 download_if_missing() {

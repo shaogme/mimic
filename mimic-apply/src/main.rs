@@ -221,7 +221,7 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
             let gw_str = if gw.is_empty() {
                 None
             } else {
-                Some(format!("[{}]", gw))
+                Some(gw.to_string())
             };
 
             let device = iface.name.clone();
@@ -234,7 +234,7 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
             // To be safe and "parse" it as requested, we handle them.
             // Many init scripts accept [ip/prefix] as client_ip.
             // But let's try to keep fields clean: client_ip=[ip], netmask=prefix.
-            let client_ip = format!("[{}]", ip_part);
+            let client_ip = ip_part.to_string();
             let netmask_str = if prefix_part.is_empty() {
                 None
             } else {
@@ -343,16 +343,68 @@ fn patch_alpine_init(initrd_path: &Path) -> Result<()> {
     while let Some(entry) = reader.next_entry()? {
         if entry.name == "init" {
             let content_str = std::str::from_utf8(&entry.content).unwrap_or("");
-            let patched = content_str.replace(
-                "ip route add 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
-                "ip route replace 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
+            // Patch 1: Change IFS to comma to allow IPv6 addresses
+            let mut patched = content_str.replace("local IFS=':'", "local IFS=','");
+
+            // Patch 2: Conditional IP assignment & Disable IPv6 Autoconf
+            // We disable RA/Autoconf on the specific interface to prevent SLAAC pollution.
+            // Then we use `ifconfig` for IPv4 and `ip addr` for IPv6.
+            let ip_assign_logic = "
+                if [ -w /proc/sys/net/ipv6/conf/\"$iface\"/accept_ra ]; then
+                    echo 0 > /proc/sys/net/ipv6/conf/\"$iface\"/accept_ra
+                    echo 0 > /proc/sys/net/ipv6/conf/\"$iface\"/autoconf
+                fi
+                
+                if echo \"$netmask\" | grep -q \"\\.\"; then
+                    ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"
+                else
+                    ip addr add \"$client_ip/$netmask\" dev \"$iface\"
+                fi";
+
+            patched = patched.replace(
+                "ifconfig \"$iface\" \"$client_ip\" netmask \"$netmask\"",
+                ip_assign_logic,
+            );
+
+            // Patch 3: IPv6-aware routing with onlink fallback
+            // We verify if gw_ip is IPv6 (contains :)
+            let route_logic = "if [ -n \"$gw_ip\" ]; then
+                if echo \"$gw_ip\" | grep -q \":\"; then
+                    ip -6 route add default via \"$gw_ip\" dev \"$iface\" || ip -6 route add default via \"$gw_ip\" dev \"$iface\" onlink
+                else
+                    ip route add default via \"$gw_ip\" dev \"$iface\"
+                fi
+            fi";
+
+            // The original script line for routing:
+            // [ -z "$gw_ip" ] || ip route add 0.0.0.0/0 via "$gw_ip" dev "$iface"
+            patched = patched.replace(
+                "[ -z \"$gw_ip\" ] || ip route add 0.0.0.0/0 via \"$gw_ip\" dev \"$iface\"",
+                route_logic,
             );
 
             if content_str == patched {
-                warn!("Could not find strict match for patching 'init'.");
-                writer.write_entry(&entry.name, &entry.content, entry.mode)?;
+                // If direct match failed, it might be due to our previous incomplete patch or whitespace.
+                // However, since we are patching the *original* downloaded file every time (if we don't cache it patched),
+                // or if we restart the process.
+                // NOTE: The previous tool execution might have left the code in a state where we are looking at the *source code* of the tool,
+                // but at runtime `install_alpine` downloads a fresh initrd if it doesn't exist.
+                // If it exists, we patch it. If it was ALREADY patched by a previous run, these replace calls might fail if they don't match.
+                // But `install_alpine` calls `patch_alpine_init` on the file.
+                // To be safe, we should warn but NOT fail if we can't patch, unless we are sure it's the raw file.
+                // Because of the 'replace' method, we can't easily detect "already patched" unless we check for the new string.
+                if patched.contains("IFS=','") && patched.contains("ip -6 route") {
+                    info!("Init script appears to be already patched.");
+                    writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
+                } else {
+                    warn!("Could not find strict match for patching 'init'. It might have changed source or be already patched in an unrecognized way.");
+                    // We write the original content if we couldn't patch strict matches,
+                    // BUT we already performed the replacements on `patched`.
+                    // If `replace` didn't find the string, `patched` == `content_str`.
+                    writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
+                }
             } else {
-                info!("Patched 'init' network logic successfully.");
+                info!("Patched 'init' network logic successfully (v2 - IPv4/v6 Hybrid).");
                 writer.write_entry(&entry.name, patched.as_bytes(), entry.mode)?;
             }
         } else {
@@ -438,6 +490,9 @@ fn generate_alpine_overlay(root: &Path, config: &DeploymentConfig) -> Result<Pat
         // Configure IPv6
         if !ipv6_addrs.is_empty() {
             iface_content.push_str(&format!("iface {} inet6 static\n", iface.name));
+            iface_content
+                .push_str("\tpre-up echo 0 > /proc/sys/net/ipv6/conf/$IFACE/dad_transmits\n");
+            iface_content.push_str("\tpre-up echo 0 > /proc/sys/net/ipv6/conf/$IFACE/accept_ra\n");
             for addr in ipv6_addrs {
                 iface_content.push_str(&format!("\taddress {}\n", addr));
             }
@@ -454,7 +509,16 @@ fn generate_alpine_overlay(root: &Path, config: &DeploymentConfig) -> Result<Pat
         fs::write(etc.join("resolv.conf"), resolv)?;
     }
     fs::write(etc.join("network/interfaces"), iface_content)?;
-    debug!("Network config written");
+    fs::write(etc.join("hostname"), "alpine-rescue\n")?;
+    debug!("Network config and hostname written");
+
+    // Enable networking service
+    if let Err(e) = std::os::unix::fs::symlink(
+        "/etc/init.d/networking",
+        etc.join("runlevels/default/networking"),
+    ) {
+        warn!("Failed to symlink networking service: {}", e);
+    }
 
     // 2. Auth
     if !config.auth.ssh_authorized_keys.is_empty() {
