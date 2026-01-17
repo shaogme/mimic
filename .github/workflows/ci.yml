@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Rust Cache
+      uses: swatinem/rust-cache@v2
+
+    - name: Build mimic-gen
+      run: cargo build --verbose --bin mimic-gen
+
+    - name: Build mimic-apply
+      run: cargo build --verbose --bin mimic-apply
+
+    - name: Run tests
+      run: cargo test --verbose --workspace

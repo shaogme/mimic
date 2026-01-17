@@ -1,0 +1,17 @@
+#!/bin/sh
+echo '=== Mimic Alpine Rescue ==='
+chmod 700 /root
+[ -d /root/.ssh ] && chmod 700 /root/.ssh
+[ -f /root/.ssh/authorized_keys ] && chmod 600 /root/.ssh/authorized_keys
+/usr/bin/ssh-keygen -A
+if [ -f /etc/root_password_hash ]; then
+    hash=$(cat /etc/root_password_hash)
+    echo "root:$hash" | chpasswd -e
+    rm /etc/root_password_hash
+    sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+fi
+rc-service sshd restart
+echo 'Ready.'

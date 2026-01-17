@@ -1,0 +1,19 @@
+[package]
+name = "mimic-apply"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mimic-shared = { path = "../mimic-shared" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+ureq = "3.1"
+flate2 = "1.1"
+tar = "0.4"
+cpio = "0.4"
+hex = "0.4"
+
