@@ -213,9 +213,9 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
             let addr = iface.addresses.iter().find(|a| a.contains(':')).unwrap();
 
             // addr format is "ip/prefix" from mimic-gen
-            let parts: Vec<&str> = addr.split('/').collect();
-            let ip_part = parts[0];
-            let prefix_part = parts.get(1).unwrap_or(&""); // e.g. "64"
+            let addr_parts: Vec<&str> = addr.split('/').collect();
+            let ip_part = addr_parts[0];
+            let prefix_part = addr_parts.get(1).unwrap_or(&""); // e.g. "64"
 
             let gw = iface.gateway6.as_deref().unwrap_or("");
             let gw_str = if gw.is_empty() {

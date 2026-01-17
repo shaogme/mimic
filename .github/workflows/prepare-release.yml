@@ -1,0 +1,48 @@
+name: Prepare Release Ready
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Modify scripts and README
+        run: |
+          # Read version from VERSION file
+          VERSION=$(cat VERSION | tr -d '\r\n')
+          echo "Using version: $VERSION"
+
+          # Modify run.sh and clean.sh: Change pre-release to the specific version in download URLs
+          sed -i "s|releases/download/pre-release|releases/download/$VERSION|g" run.sh clean.sh
+          
+          # Modify README.md: Change dev branch ref to main branch ref
+          sed -i 's|refs/heads/dev|refs/heads/main|g' README.md
+          
+          # Verify changes
+          grep "releases/download/$VERSION" run.sh || echo "Modification failed for run.sh"
+          grep "refs/heads/main" README.md || echo "Modification failed for README.md"
+
+      - name: Commit and Push to release-ready
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add run.sh clean.sh README.md
+          
+          # Amend the previous commit with the changes
+          # We use --no-edit to keep the original commit message
+          git commit --amend --no-edit
+          
+          # Force push to release-ready branch
+          git push -f origin HEAD:release-ready
