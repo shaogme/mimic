@@ -1,7 +1,9 @@
 mod bootloader;
 mod cpio;
+mod net_params;
 use bootloader::{probe_bootloader, register_boot_entry, remove_boot_entry};
 use cpio::{CpioReader, CpioWriter};
+use net_params::KernelIpConfig;
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
@@ -160,14 +162,18 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
     // Syntax: ip=client-ip:server-ip:gw-ip:netmask:hostname:device:autoconf:dns0-ip:dns1-ip
 
     // Find the first interface with a valid IPv4 address
-    let main_iface = config.network.interfaces.iter().find(
-        |iface| !iface.addresses.is_empty() && iface.addresses[0].contains('.'), // simplistic check for ipv4
-    );
+    let ipv4_iface = config.network.interfaces.iter().find(|iface| {
+        iface
+            .addresses
+            .iter()
+            .any(|a| a.contains('.') && !a.starts_with("127."))
+    });
 
-    if let Some(iface) = main_iface {
-        let first_addr = &iface.addresses[0]; // e.g., "192.168.1.10/24"
-        let parts_addr: Vec<&str> = first_addr.split('/').collect();
-        let ip = parts_addr[0];
+    if let Some(iface) = ipv4_iface {
+        // Use IPv4
+        let addr = iface.addresses.iter().find(|a| a.contains('.')).unwrap(); // confirmed exists
+        let parts_addr: Vec<&str> = addr.split('/').collect();
+        let ip = parts_addr[0].to_string();
         let prefix = parts_addr
             .get(1)
             .unwrap_or(&"24")
@@ -175,25 +181,83 @@ fn build_kernel_cmdline(config: &DeploymentConfig) -> Result<String> {
             .unwrap_or(24);
         let netmask = cidr_to_netmask(prefix)?;
 
-        let gw = iface.gateway.as_deref().unwrap_or("");
-        let device = &iface.name;
-        let dns1 = config.network.dns.get(0).map(|s| s.as_str()).unwrap_or("");
-        let dns2 = config.network.dns.get(1).map(|s| s.as_str()).unwrap_or("");
+        let gw = iface.gateway.clone();
+        let device = iface.name.clone();
+        let dns1 = config.network.dns.get(0).cloned();
+        let dns2 = config.network.dns.get(1).cloned();
 
-        // Construct the ip parameter
-        let ip_param = format!(
-            "ip={ip}::{gw}:{netmask}:alpine-rescue:{device}:off:{dns1}:{dns2}",
-            ip = ip,
-            gw = gw,
-            netmask = netmask,
-            device = device,
-            dns1 = dns1,
-            dns2 = dns2
-        );
-        parts.push(ip_param);
+        let ip_config = KernelIpConfig {
+            client_ip: Some(ip),
+            gw_ip: gw,
+            netmask: Some(netmask),
+            hostname: Some("alpine-rescue".to_string()),
+            device: Some(device),
+            autoconf: Some("off".to_string()),
+            dns0: dns1,
+            dns1: dns2,
+            ..Default::default()
+        };
+
+        parts.push(ip_config.to_string());
     } else {
-        // Fallback to DHCP if no suitable static config found
-        parts.push("ip=dhcp".to_string());
+        // Fallback: Check for IPv6
+        let ipv6_iface = config.network.interfaces.iter().find(|iface| {
+            iface
+                .addresses
+                .iter()
+                .any(|a| a.contains(':') && !a.starts_with("::1"))
+        });
+
+        if let Some(iface) = ipv6_iface {
+            // Use IPv6
+            let addr = iface.addresses.iter().find(|a| a.contains(':')).unwrap();
+
+            // addr format is "ip/prefix" from mimic-gen
+            let parts: Vec<&str> = addr.split('/').collect();
+            let ip_part = parts[0];
+            let prefix_part = parts.get(1).unwrap_or(&""); // e.g. "64"
+
+            let gw = iface.gateway6.as_deref().unwrap_or("");
+            let gw_str = if gw.is_empty() {
+                None
+            } else {
+                Some(format!("[{}]", gw))
+            };
+
+            let device = iface.name.clone();
+            let dns1 = config.network.dns.get(0).cloned();
+            let dns2 = config.network.dns.get(1).cloned();
+
+            // Format for IPv6 Client IP: [addr]
+            // We pass raw IP in brackets. We pass prefix in 'netmask' field?
+            // Or we pass [ip/prefix] in client_ip and leave netmask empty?
+            // To be safe and "parse" it as requested, we handle them.
+            // Many init scripts accept [ip/prefix] as client_ip.
+            // But let's try to keep fields clean: client_ip=[ip], netmask=prefix.
+            let client_ip = format!("[{}]", ip_part);
+            let netmask_str = if prefix_part.is_empty() {
+                None
+            } else {
+                Some(prefix_part.to_string())
+            };
+
+            let ip_config = KernelIpConfig {
+                client_ip: Some(client_ip),
+                gw_ip: gw_str,
+                netmask: netmask_str,
+                hostname: Some("alpine-rescue".to_string()),
+                device: Some(device),
+                autoconf: Some("off".to_string()),
+                dns0: dns1,
+                dns1: dns2,
+                ..Default::default()
+            };
+
+            parts.push(ip_config.to_string());
+        } else {
+            // Fallback to DHCP if no suitable static config found
+            parts.push(KernelIpConfig::dhcp().to_string());
+        }
     }
 
     Ok(parts.join(" "))
@@ -347,12 +411,39 @@ fn generate_alpine_overlay(root: &Path, config: &DeploymentConfig) -> Result<Pat
     let mut iface_content = String::from("auto lo\niface lo inet loopback\n");
     for iface in &config.network.interfaces {
         iface_content.push_str(&format!("\nauto {}\n", iface.name));
-        iface_content.push_str(&format!("iface {} inet static\n", iface.name));
-        if let Some(addr) = iface.addresses.first() {
-            iface_content.push_str(&format!("\taddress {}\n", addr));
+
+        // Separate IPv4 and IPv6 addresses
+        let mut ipv4_addrs = Vec::new();
+        let mut ipv6_addrs = Vec::new();
+
+        for addr in &iface.addresses {
+            if addr.contains(':') {
+                ipv6_addrs.push(addr);
+            } else {
+                ipv4_addrs.push(addr);
+            }
         }
-        if let Some(gw) = &iface.gateway {
-            iface_content.push_str(&format!("\tgateway {}\n", gw));
+
+        // Configure IPv4
+        if !ipv4_addrs.is_empty() {
+            iface_content.push_str(&format!("iface {} inet static\n", iface.name));
+            for addr in ipv4_addrs {
+                iface_content.push_str(&format!("\taddress {}\n", addr));
+            }
+            if let Some(gw) = &iface.gateway {
+                iface_content.push_str(&format!("\tgateway {}\n", gw));
+            }
+        }
+
+        // Configure IPv6
+        if !ipv6_addrs.is_empty() {
+            iface_content.push_str(&format!("iface {} inet6 static\n", iface.name));
+            for addr in ipv6_addrs {
+                iface_content.push_str(&format!("\taddress {}\n", addr));
+            }
+            if let Some(gw6) = &iface.gateway6 {
+                iface_content.push_str(&format!("\tgateway {}\n", gw6));
+            }
         }
     }
     if !config.network.dns.is_empty() {
