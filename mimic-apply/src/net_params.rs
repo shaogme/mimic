@@ -74,7 +74,9 @@ impl fmt::Display for KernelIpConfig {
         // For safety, if we have specific static IP details, we use the long format.
 
         // Helper to get string or empty
-        let s = |opt: &Option<String>| opt.as_deref().unwrap_or("");
+        fn s(opt: &Option<String>) -> &str {
+            opt.as_deref().unwrap_or("")
+        }
 
         let is_simple_autoconf = self.client_ip.is_none()
             && self.server_ip.is_none()
