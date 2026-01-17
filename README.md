@@ -27,7 +27,7 @@
 无需克隆仓库，直接下载脚本并运行即可：
 
 ```bash
-curl -LO https://raw.githubusercontent.com/shaogme/mimic/refs/heads/dev/run.sh
+curl -LO https://raw.githubusercontent.com/shaogme/mimic/refs/heads/main/run.sh
 chmod +x run.sh
 sudo ./run.sh
 ```
@@ -47,7 +47,7 @@ Run 'reboot' to start the Mimic Alpine Rescue System.
 
 如果你不再需要 Mimic 救援系统，可以下载 `clean.sh` 脚本进行一键清理：
 ```bash
-curl -LO https://raw.githubusercontent.com/shaogme/mimic/refs/heads/dev/clean.sh
+curl -LO https://raw.githubusercontent.com/shaogme/mimic/refs/heads/main/clean.sh
 chmod +x clean.sh
 sudo ./clean.sh
 ```
