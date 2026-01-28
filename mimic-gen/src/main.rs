@@ -83,6 +83,18 @@ fn generate_network_config() -> Result<NetworkConfig> {
     let ipv6_routes: Vec<serde_json::Value> =
         serde_json::from_slice(&output.stdout).unwrap_or_default();
 
+    let resolv = fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+
+    parse_network_config(links, addrs, ipv4_routes, ipv6_routes, &resolv)
+}
+
+fn parse_network_config(
+    links: Vec<serde_json::Value>,
+    addrs: Vec<serde_json::Value>,
+    ipv4_routes: Vec<serde_json::Value>,
+    ipv6_routes: Vec<serde_json::Value>,
+    resolv_conf: &str,
+) -> Result<NetworkConfig> {
     let mut interfaces = Vec::new();
 
     for link in links {
@@ -141,8 +153,7 @@ fn generate_network_config() -> Result<NetworkConfig> {
         }
     }
 
-    let resolv = fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
-    let dns: Vec<String> = resolv
+    let dns: Vec<String> = resolv_conf
         .lines()
         .filter(|l| l.starts_with("nameserver"))
         .map(|l| l.split_whitespace().nth(1).unwrap_or("").to_string())
@@ -209,4 +220,125 @@ fn generate_auth_config() -> Result<AuthConfig> {
     }
 
     Ok(auth)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_network_config_simple() {
+        let links = vec![
+            json!({
+                "ifname": "lo",
+                "address": "00:00:00:00:00:00"
+            }),
+            json!({
+                "ifname": "eth0",
+                "address": "aa:bb:cc:dd:ee:ff"
+            }),
+        ];
+
+        let addrs = vec![
+            json!({
+                "ifname": "eth0",
+                "addr_info": [
+                    {
+                        "scope": "global",
+                        "local": "192.168.1.100",
+                        "prefixlen": 24
+                    }
+                ]
+            }),
+        ];
+
+        let v4_routes = vec![
+            json!({
+                "dev": "eth0",
+                "gateway": "192.168.1.1"
+            })
+        ];
+
+        let v6_routes = vec![];
+        let resolv = "nameserver 1.1.1.1\nnameserver 8.8.8.8";
+
+        let config = parse_network_config(links, addrs, v4_routes, v6_routes, resolv).unwrap();
+
+        assert_eq!(config.interfaces.len(), 1);
+        let iface = &config.interfaces[0];
+        assert_eq!(iface.name, "eth0");
+        assert_eq!(iface.mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(iface.addresses, vec!["192.168.1.100/24"]);
+        assert_eq!(iface.gateway, Some("192.168.1.1".to_string()));
+        assert_eq!(config.dns, vec!["1.1.1.1", "8.8.8.8"]);
+    }
+
+    #[test]
+    fn test_parse_network_config_dual_stack() {
+        let links = vec![
+            json!({
+                "ifname": "eth0",
+                "address": "aa:bb:cc:dd:ee:ff"
+            }),
+        ];
+
+        let addrs = vec![
+            json!({
+                "ifname": "eth0",
+                "addr_info": [
+                    {
+                        "scope": "global",
+                        "local": "192.168.1.100",
+                        "prefixlen": 24
+                    },
+                    {
+                        "scope": "global",
+                        "local": "2001:db8::1",
+                        "prefixlen": 64
+                    }
+                ]
+            }),
+        ];
+
+        let v4_routes = vec![];
+        let v6_routes = vec![
+            json!({
+                "dev": "eth0",
+                "gateway": "2001:db8::1"
+            })
+        ];
+        let resolv = "";
+
+        let config = parse_network_config(links, addrs, v4_routes, v6_routes, resolv).unwrap();
+
+        assert_eq!(config.interfaces.len(), 1);
+        let iface = &config.interfaces[0];
+        assert_eq!(iface.addresses.len(), 2);
+        assert!(iface.addresses.contains(&"192.168.1.100/24".to_string()));
+        assert!(iface.addresses.contains(&"2001:db8::1/64".to_string()));
+        assert_eq!(iface.gateway6, Some("2001:db8::1".to_string()));
+    }
+    
+    #[test]
+    fn test_skip_loopback_and_empty() {
+         let links = vec![
+            json!({
+                "ifname": "lo",
+                "address": "00:00:00:00:00:00"
+            }),
+            json!({
+                "ifname": "sit0",
+                "address": "00:00:00:00:00:00"
+            }),
+        ];
+        
+        let addrs = vec![];
+        let v4 = vec![];
+        let v6 = vec![];
+        let resolv = "";
+        
+        let config = parse_network_config(links, addrs, v4, v6, resolv).unwrap();
+        assert!(config.interfaces.is_empty());
+    }
 }
